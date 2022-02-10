@@ -1,0 +1,45 @@
+
+
+to init-tuShare-api
+  py:setup "/Users/gaojihe/env/bin/python3"
+  py:run "import tushare as ts"
+  py:run "ts.set_token('cfd0f555b15a532de3dcfb0b910661ca48edca2b5571833144d999df')"
+  py:run "pro = ts.pro_api()"
+end
+
+
+
+to generate-universe
+  py:run (word "df = pro.daily(trade_date='" time:show dt "yyyyMMdd" "')")
+  set universe py:runresult "df.ts_code"
+end
+
+to write-universe
+  file-open "universe.txt"
+  file-write universe
+  file-close
+end
+
+
+to request-and-write-daily-data ;[ date0 date1 ]
+  
+  foreach universe [ code ->
+    carefully [
+      (py:run 
+        (word "df = ts.pro_bar(ts_code='" code "', adj='hfq', start_date='20170101', end_date='20220128')" )
+        ("df = df[['trade_date', 'open', 'high', 'low', 'close', 'pre_close', 'vol' ]]")
+        (word "df.to_csv('daily/" code ".csv',index=None)")
+      )
+    ][]
+    tick
+  ]
+
+end
+
+
+to test
+  py:run "df = ts.pro_bar( ts_code='000001.SZ', start_date='20180101', end_date='20220128' )  "
+  show "OK"
+  show py:runresult "df"
+end
+
