@@ -5,6 +5,10 @@ end
 
 
 to-report ts-add-row [ltime-series row]
+  
+  let row_time time:create-with-format __time-of row "yyyyMMdd"
+  set row fput row_time (but-first row)
+  
   (ifelse
     length ltime-series = 1 or time:is-after? (__time-of row) (__time-of last ltime-series) [
       report lput (__row-copy row) ltime-series

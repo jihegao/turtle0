@@ -2,9 +2,8 @@
 
 to init-tuShare-api
   py:setup "/Users/gaojihe/env/bin/python3"
-  py:run "import tushare as ts"
-  py:run "ts.set_token('cfd0f555b15a532de3dcfb0b910661ca48edca2b5571833144d999df')"
-  py:run "pro = ts.pro_api()"
+
+  py:run "import test"
 end
 
 

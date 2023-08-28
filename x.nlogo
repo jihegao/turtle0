@@ -1,6 +1,6 @@
 ; ------------------------------------------------------------------------------------------
 ;
-; T U R T L E L A B  -   A NetLogo-based Quant toolbox
+; A NetLogo-based Quant toolbox
 ;
 ; ------------------------------------------------------------------------------------------
 __includes ["time-series.nls" "tuShare.nls"]
@@ -14,16 +14,18 @@ breed [ investors investor ]
 stocks-own [
   ts ; daily price sheet
   macd_score
+  history
 ]
 
 investors-own [
-  portfolio
+  portfolio ;table
   money
   strategy
   max_gain
   max_value
   max_drawback
   cum_dev
+  trade_list
 ]
 
 
@@ -44,29 +46,32 @@ to init
 end
 
 to setup
+  clear-all
   reset-ticks
   set dt time:create-with-format "20210104" "yyyyMMdd"
   ;
-  ;init-tuShare-api
+  init-tuShare-api
 
-  file-open "universe.txt"
-  set universe read-from-string file-read-line
+  file-open "codes.txt"
+  set universe []
+  while [not file-at-end?][
+    set universe lput file-read-line universe
+  ]
   file-close
 
   if test?[
-    set turtle_period_x read-from-string test_x
+    set turtle_period_x read-from-string macd_x
   ]
 
   setup-stocks
   setup-investors
 
-  ; first sotck MUST BE 000001.SZ
   set trading_date_list map [? -> first ?] but-first [ts] of (first sort stocks)
-  ask stocks [
-    if not time:is-equal? (first item 1 ts) (first trading_date_list) [ die ]
-  ]
+;  ask stocks [
+;    if not time:is-equal? (first item 1 ts) (first trading_date_list) [ die ]
+;  ]
 
-  set universe [label] of stocks
+  ;set universe [label] of stocks
 end
 
 
@@ -76,25 +81,24 @@ to setup-stocks
   foreach universe [ code ->
     create-stocks 1 [
       set label code
+      set history []
       table:put univ_code_table label self
-      carefully [
-        set ts (ts-load-with-format (word "daily/" code ".csv") "yyyyMMdd")
-      ][ die ]
+
+      set ts ts-create ["open" "high" "low" "close" "pre_close" "change" "pct_chg" "vol" "amount"]
+
+      let dlist py:runresult (word "test.get_bar_sql('" label "')")
+
+      foreach dlist [ d -> set ts ts-add-row ts d ]
+      if empty? dlist [ die ]
     ]
   ]
 
 end
 
-
-to calc-stock-ma
-  foreach sort stocks [s ->
-    foreach ts [ t ->
-    ]
-  ]
-end
 
 
 to reset-investors
+  clear-all-plots
   ask investors [die]
   reset-ticks
   set dt time:create-with-format "20210104" "yyyyMMdd"
@@ -106,7 +110,7 @@ to setup-investors
     set investor0 self
     set portfolio table:make
     set money 1000000
-    set strategy [ -> turtle-strategy turtle_period_x ]
+    set strategy [ -> strategy_macd_simple turtle_period_x ]
     set money0 money
   ]
 end
@@ -119,19 +123,50 @@ to-report portfolio-networth
   report sum map [p -> [(__close_price dt)] of (table:get univ_code_table (first p)) * (last p)] table:to-list portfolio
 end
 
-to turtle-strategy [ p_s_list ]
-  let trade_list sort-by [[s1 s2] -> abs [macd_score] of s1 > abs [macd_score] of s2] stocks with [abs macd_score > 0]
+to strategy_macd_simple [ p_s_list ]
+  set trade_list sort-by [[s1 s2] -> abs [macd_score] of s1 > abs [macd_score] of s2] stocks with [abs macd_score > buy_threshold]
   foreach trade_list [
     s ->
-    let #vol ifelse-value ([macd_score] of s > 0)
-      [ floor (money0 * [macd_score / (__open_price dt) / 100] of s) * 100 ]
-      [ floor ( ifelse-value (table:has-key? portfolio [label] of s)[ [macd_score] of s * table:get portfolio [label] of s ][ 0 ] ) ]
+    let #vol 0
+    ; for negative score
+    if ([macd_score] of s < 0)[
+      set #vol floor ( ifelse-value (table:has-key? portfolio [label] of s)[ [macd_score] of s * table:get portfolio [label] of s ][ 0 ] )
+    ]
+
+    ; for positive score
+    if ([macd_score] of s > buy_threshold)[
+      set #vol floor ([money0 * 0.1 / __open_price dt / 100] of s) * 100 ]
 
     ; buy or sell
-    if #vol != 0 [ order s dt #vol ]
+    if #vol != 0 [
+      ;show (list [label] of s dt #vol)
+      order s dt #vol
+    ]
   ]
 end
 
+
+
+to update-macd_score [date p_s_list]; [s date p_s_list] ; p_s_list as [ [period_1 period_2 score] ... ]
+  ;let index position date trading_date_list
+  ask stocks [
+    set macd_score (macd_sc_calc date p_s_list)
+  ]
+end
+
+to-report macd_sc_calc [ index p_s_list ]
+  let score 0
+  foreach p_s_list [ l ->
+    let p1 first l
+    let p2 item 1 l
+    let s last l
+
+    if (MA p1 index > MA p2 index )[
+      set score score + s
+    ]
+  ]
+  report score
+end
 
 to-report MA [n index]
   let index-n ifelse-value(index > n)[index - n][0]
@@ -141,61 +176,48 @@ to-report MA [n index]
   report __pre_close first (but-first ts)
 end
 
-to update-macd_score [date p_s_list]; [s date p_s_list] ; p_s_list as [ [period_1 period_2 score] ... ]
-  let index position date trading_date_list
-  ask stocks [
-    set macd_score (macd_sc_calc date p_s_list)
-  ]
-end
-
-to-report macd_sc_calc [ index p_s_list ]
-  foreach p_s_list [ l ->
-    let p1 first l
-    let p2 item 1 l
-    let score last l
-
-    if (score < 0 and ( MA p1 index < MA p2 index))[
-      report score
-    ]
-    if (score > 0 and MA p1 index > MA p2 index )[
-      report score
-    ]
-  ]
-  report 0
-end
 
 
 to order [s date #vol]
   let code [label] of s
-  let $ [__close_price date] of s
-  let $transaction $ * #vol
-  let transactional_cost $transaction * transaction_rate
+
   let traded? false
 
-  ifelse #vol > 0 [
-    ; buy at open price
-    if ([__high_price date > __open_price date] of s) and ($transaction + transactional_cost) <= money [
+  ifelse #vol > 0 [ ; buy at close price
+    let $ [__close_price date] of s
+    let $transaction $ * #vol
+    let transactional_cost $transaction * transaction_rate
+
+    if ([__high_price date > __close_price date] of s) and money >= ($transaction + transactional_cost) [
       set traded? true
       set money money - $transaction - transactional_cost
       table:put portfolio code #vol +
           ; add #vol onto (if) existed amount of this stock
-          ifelse-value (table:has-key? portfolio code)[table:get portfolio code][0]
+          table:get-or-default portfolio code 0
+      ask s [set history lput (list $ #vol) history]
     ]
   ][ ; sell at open price
+    let $ [__open_price date] of s
+    let $transaction $ * #vol
+    let transactional_cost $transaction * transaction_rate
     set traded? true
-    if (table:has-key? portfolio code) and ([__high_price date > __open_price date] of s) [
+    if (table:has-key? portfolio code) and ([__high_price date >= __open_price date] of s) [
       set money money - $transaction - transactional_cost
       table:remove portfolio code
+      ask s [set history lput (list $ #vol) history]
     ]
   ]
 
-  if debug? and traded? [
+  if test? and traded? [
     print (word time:show dt "yyyyMMdd" "|" [label] of s " x " #vol " shares @" ([__close_price dt] of s) " cash: "  round money "\t portfolio: " filter [? -> last ? > 0] table:to-list portfolio)
   ]
 end
 
+to gen-trade-advice
+  ask investor0 []
+end
 
-to back-test [index0 index1]
+to-report back-test [index0 index1]
   reset-ticks
 
   set dt item index0 trading_date_list
@@ -207,7 +229,8 @@ to back-test [index0 index1]
 
   foreach map [? -> index0 + ?] range (index1 - index0) [ index ->
 
-    update-macd_score index turtle_period_x
+    ; update-macd_score index turtle_period_x
+    ask stocks [ set macd_score (macd_sc_calc index turtle_period_x)  ]
 
     set dt item index trading_date_list
 
@@ -217,6 +240,11 @@ to back-test [index0 index1]
     ]
 
     if test? [
+      if showCandiList? [
+        let candi_list map [? -> [list label macd_score] of ?]filter [? -> [macd_score] of ? > buy_threshold] sort-by [[?1 ?2] -> [macd_score] of ?1 > [macd_score] of ?2] [trade_list] of investor0
+        show length candi_list
+        show candi_list
+      ]
       set-current-plot "daily"
       set-current-plot-pen "benchmark"
       plot (__benchmark_index / ben0)
@@ -232,9 +260,9 @@ to back-test [index0 index1]
         plot portfolio-networth
       ]
     ]
-
     tick
   ]
+  report [investor-networth / money0] of investor0
 end
 
 to update-params
@@ -277,7 +305,7 @@ end
 
 
 to-report __benchmark_index
-  report mean [ __close_price dt ] of stocks
+  report [ __close_price dt ] of (table:get univ_code_table benchmark)
 end
 
 
@@ -299,6 +327,15 @@ end
 
 to-report __vol [row]
   report last row
+end
+
+
+to-report history_summary
+  report [(list
+    ifelse-value (sum map [? -> last ?] history = 0)
+        [ (-1 * sum map [? -> first ? * last ?] history) ]
+        [ (-1 * sum map [? -> first ? * last ?] history) + sum map [? -> last ?] history * __close_price dt ]
+    history)] of stocks with [not empty? history]
 end
 @#$#@#$#@
 GRAPHICS-WINDOW
@@ -346,12 +383,12 @@ NIL
 1
 
 SWITCH
-13
-248
-116
-281
-debug?
-debug?
+249
+57
+401
+90
+showCandiList?
+showCandiList?
 0
 1
 -1000
@@ -374,7 +411,6 @@ true
 PENS
 "benchmark" 1.0 0 -13791810 true "" ""
 "strategy" 1.0 0 -2674135 true "" ""
-"trade" 1.0 0 -14439633 true "" ""
 
 INPUTBOX
 985
@@ -382,7 +418,7 @@ INPUTBOX
 1146
 70
 benchmark
-000001.SZ
+399300.SZ
 1
 0
 String
@@ -399,12 +435,12 @@ time:show (item (d0 + ticks) trading_date_list) \"yyyyMMdd\"
 11
 
 BUTTON
-975
-275
-1104
-308
-NIL
+983
+218
+1112
+251
 back-test d0 d1
+set turtle_period_x read-from-string test_x \nreset-investors\nshow back-test d0 d1
 NIL
 1
 T
@@ -416,10 +452,10 @@ NIL
 1
 
 INPUTBOX
-975
-213
-1124
-273
+983
+156
+1132
+216
 transaction_rate
 0.002
 1
@@ -451,7 +487,7 @@ INPUTBOX
 845
 70
 d0
-1000.0
+900.0
 1
 0
 Number
@@ -462,7 +498,7 @@ INPUTBOX
 966
 70
 d1
-1235.0
+995.0
 1
 0
 Number
@@ -490,10 +526,10 @@ time:show (item d1 trading_date_list) \"yyyyMMdd\"
 11
 
 SWITCH
-375
-74
-478
-107
+350
+19
+453
+52
 test?
 test?
 0
@@ -501,10 +537,10 @@ test?
 -1000
 
 MONITOR
-377
-155
-486
 200
+152
+486
+197
 NIL
 turtle_period_x
 17
@@ -512,23 +548,23 @@ turtle_period_x
 11
 
 INPUTBOX
-292
-204
+200
+200
 486
-264
-test_x
-[[5 20 -1][10 200 -1] [ 3 5 0.2] ]
+408
+macd_x
+[\n[ 60 5      -1   ]\n[ 5   10    0.06]\n[ 10 30    0.06]\n[ 30 60    0.06]\n[ 60 180  0.05]\n]
 1
-0
+1
 String
 
 BUTTON
-56
-361
-183
-394
+84
+17
+211
+50
 reset-investors
-reset-investors\nset turtle_period_x read-from-string test_x \nclear-all-plots
+reset-investors\nset turtle_period_x read-from-string test_x 
 NIL
 1
 T
@@ -553,6 +589,61 @@ test_days
 1
 NIL
 HORIZONTAL
+
+SWITCH
+244
+19
+347
+52
+trade?
+trade?
+0
+1
+-1000
+
+PLOT
+970
+305
+1183
+476
+profit-dist
+NIL
+NIL
+0.0
+10.0
+0.0
+10.0
+true
+false
+"" ""
+PENS
+"profit" 1.0 1 -16777216 true "" ""
+
+SLIDER
+16
+374
+188
+407
+buy_threshold
+buy_threshold
+0.01
+1
+0.1
+0.01
+1
+NIL
+HORIZONTAL
+
+INPUTBOX
+204
+428
+433
+488
+test_x
+NIL
+1
+0
+String
 
 @#$#@#$#@
 ## WHAT IS IT?
@@ -912,46 +1003,27 @@ false
 Polygon -7500403 true true 270 75 225 30 30 225 75 270
 Polygon -7500403 true true 30 75 75 30 270 225 225 270
 @#$#@#$#@
-NetLogo 6.2.2
+NetLogo 6.3.0
 @#$#@#$#@
 @#$#@#$#@
 @#$#@#$#@
 <experiments>
-  <experiment name="experiment" repetitions="1" runMetricsEveryStep="false">
+  <experiment name="experiment" repetitions="1" runMetricsEveryStep="true">
     <setup>setup</setup>
-    <go>back-test d0 (d0 + test_days)</go>
-    <exitCondition>ticks &gt;= test_days</exitCondition>
-    <metric>[sharp]of investor0</metric>
-    <metric>[investor-networth] of investor0</metric>
-    <enumeratedValueSet variable="selected_code">
-      <value value="&quot;000001.SZ&quot;"/>
+    <go>go</go>
+    <metric>[portfolio-networth] of investor0</metric>
+    <enumeratedValueSet variable="benchmark">
+      <value value="&quot;399300.SZ&quot;"/>
     </enumeratedValueSet>
     <enumeratedValueSet variable="transaction_rate">
       <value value="0.002"/>
     </enumeratedValueSet>
     <enumeratedValueSet variable="test_x">
-      <value value="&quot;[[5 20 -1][10 200 -1] [ 3 5 0.2] ]&quot;"/>
-      <value value="&quot;[[5 20 -1][10 200 -1] [ 3 5 0.1] ]&quot;"/>
-      <value value="&quot;[[5 20 -1][10 200 -1] [ 3 5 0.05] ]&quot;"/>
-      <value value="&quot;[[5 20 -1] [ 3 5 0.2] ]&quot;"/>
-      <value value="&quot;[[5 20 -1] [ 3 5 0.1] ]&quot;"/>
-      <value value="&quot;[[5 20 -1] [ 3 5 0.05] ]&quot;"/>
+      <value value="&quot;[[3 10 -1][5 20 -1][10 200 -1] [ 5 10 0.1] ]&quot;"/>
     </enumeratedValueSet>
-    <enumeratedValueSet variable="d0">
-      <value value="100"/>
-      <value value="200"/>
-      <value value="300"/>
-      <value value="400"/>
-      <value value="500"/>
-      <value value="600"/>
-      <value value="700"/>
-      <value value="800"/>
-      <value value="900"/>
-    </enumeratedValueSet>
+    <steppedValueSet variable="d0" first="200" step="200" last="800"/>
     <enumeratedValueSet variable="test_days">
-      <value value="100"/>
-      <value value="200"/>
-      <value value="300"/>
+      <value value="180"/>
     </enumeratedValueSet>
     <enumeratedValueSet variable="test?">
       <value value="true"/>

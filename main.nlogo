@@ -59,7 +59,7 @@ to backtest
   ls:ask ls:models [back-test]
 end
 
-to show-sharp
+to show-sharp ; sharp ratio
   foreach sort investors [in ->
     ask in [
       show list strategy (ls:report my_model [x -> [sharp] of investor0] who)
@@ -570,7 +570,7 @@ false
 Polygon -7500403 true true 270 75 225 30 30 225 75 270
 Polygon -7500403 true true 30 75 75 30 270 225 225 270
 @#$#@#$#@
-NetLogo 6.2.2
+NetLogo 6.3.0
 @#$#@#$#@
 @#$#@#$#@
 @#$#@#$#@
